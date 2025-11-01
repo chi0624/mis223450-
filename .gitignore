@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# SQLite
+*.sqlite3
+db.sqlite3
+
+
+env/
+.env
+.DS_Store
+*.webm
+*.wav
+
+# Virtual env
+venv/
+__pycache__/
+*.pyc
+*.sqlite3
+*.log
+.env
+*.env
+
+# DB、暫存與媒體
+
+
+*.webm
+*.wav
+*.tmp
+media/
+staticfiles/
+
+# VS Code
+.vscode/
+
+# Migrations
+**/migrations/*.py[cod]
+!**/migrations/__init__.py

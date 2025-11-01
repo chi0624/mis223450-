@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖表測試</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .chart-container {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        canvas {
+            max-height: 400px;
+        }
+        
+        .debug {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border: 1px solid #ffc107;
+        }
+        
+        .success {
+            background: #d4edda;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border: 1px solid #28a745;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>📊 Chart.js 測試頁面</h1>
+
+    <div class="debug">
+        <h3>🔧 測試資訊</h3>
+        <p>這是一個獨立的測試頁面，用來確認 Chart.js 是否正常運作。</p>
+        <p id="chartJsVersion">Chart.js 版本檢查中...</p>
+        <p id="dataInfo">數據準備中...</p>
+    </div>
+
+    <div class="chart-container">
+        <h3>📈 測試折線圖</h3>
+        <canvas id="testLineChart"></canvas>
+    </div>
+
+    <div class="chart-container">
+        <h3>📊 測試長條圖</h3>
+        <canvas id="testBarChart"></canvas>
+    </div>
+
+    <div class="chart-container">
+        <h3>🎯 測試雷達圖</h3>
+        <canvas id="testRadarChart"></canvas>
+    </div>
+
+    <div id="result"></div>
+
+    <script>
+        // 檢查 Chart.js 是否載入
+        if (typeof Chart !== 'undefined') {
+            document.getElementById('chartJsVersion').innerHTML =
+                '✅ Chart.js 已載入 - 版本: ' + Chart.version;
+        } else {
+            document.getElementById('chartJsVersion').innerHTML =
+                '❌ Chart.js 未載入！';
+        }
+
+        // 測試數據
+        const testLabels = ['單元一', '單元二', '單元三', '單元四', '單元五'];
+        const testData = [75, 82, 68, 91, 85];
+
+        document.getElementById('dataInfo').innerHTML =
+            `✅ 測試數據：Labels = ${testLabels.length} 項, Data = ${testData.length} 項`;
+
+        // 等待 DOM 載入完成
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM 載入完成');
+
+            try {
+                // 1. 折線圖
+                const lineCtx = document.getElementById('testLineChart');
+                if (lineCtx) {
+                    new Chart(lineCtx, {
+                        type: 'line',
+                        data: {
+                            labels: testLabels,
+                            datasets: [{
+                                label: '正確率 (%)',
+                                data: testData,
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                                borderWidth: 2,
+                                tension: 0.4,
+                                fill: true,
+                                pointRadius: 5
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            plugins: {
+                                legend: {
+                                    display: true
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    min: 0,
+                                    max: 100,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value + '%';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    console.log('✅ 折線圖創建成功');
+                }
+
+                // 2. 長條圖
+                const barCtx = document.getElementById('testBarChart');
+                if (barCtx) {
+                    new Chart(barCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: testLabels,
+                            datasets: [{
+                                label: '正確率 (%)',
+                                data: testData,
+                                backgroundColor: [
+                                    'rgba(255, 99, 132, 0.8)',
+                                    'rgba(54, 162, 235, 0.8)',
+                                    'rgba(255, 206, 86, 0.8)',
+                                    'rgba(75, 192, 192, 0.8)',
+                                    'rgba(153, 102, 255, 0.8)'
+                                ],
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            plugins: {
+                                legend: {
+                                    display: false
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    min: 0,
+                                    max: 100,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value + '%';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    console.log('✅ 長條圖創建成功');
+                }
+
+                // 3. 雷達圖
+                const radarCtx = document.getElementById('testRadarChart');
+                if (radarCtx) {
+                    new Chart(radarCtx, {
+                        type: 'radar',
+                        data: {
+                            labels: testLabels,
+                            datasets: [{
+                                label: '正確率 (%)',
+                                data: testData,
+                                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            scales: {
+                                r: {
+                                    min: 0,
+                                    max: 100,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value + '%';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    console.log('✅ 雷達圖創建成功');
+                }
+
+                // 顯示成功訊息
+                document.getElementById('result').innerHTML = `
+        <div class="success">
+          <h3>✅ 所有圖表創建成功！</h3>
+          <p>如果你看到上面的三個圖表，代表 Chart.js 運作正常。</p>
+          <p>如果在你的 Django 頁面看不到圖表，問題可能出在：</p>
+          <ul>
+            <li>Django View 沒有正確傳遞數據</li>
+            <li>模板中的 JSON 序列化有問題</li>
+            <li>JavaScript 執行順序錯誤</li>
+          </ul>
+        </div>
+      `;
+
+            } catch (error) {
+                console.error('❌ 圖表創建失敗:', error);
+                document.getElementById('result').innerHTML = `
+        <div style="background: #f8d7da; padding: 15px; border-radius: 5px; border: 1px solid #dc3545;">
+          <h3>❌ 錯誤</h3>
+          <p>${error.message}</p>
+        </div>
+      `;
+            }
+        });
+    </script>
+
+</body>
+
+</html>

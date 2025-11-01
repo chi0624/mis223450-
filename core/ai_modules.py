@@ -1,7 +1,7 @@
-# core/services.py
 import os
 import re
 import json
+import tempfile
 from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
@@ -9,51 +9,98 @@ from openai import OpenAI
 from django.conf import settings
 from .models import Lecture, Question
 
-load_dotenv()  # 允許本地用 .env，Render 用 Environment 變數
+# 音訊處理（需 ffmpeg；你的 apt.txt 已含 ffmpeg）
+from pydub import AudioSegment
+
+load_dotenv()  # 本地讀 .env；Render 讀 Environment
 
 
-# -----------------------------
-# OpenAI Client 取得
-# -----------------------------
+# =========================
+# OpenAI Client
+# =========================
 def create_openai_client() -> OpenAI:
-    """
-    從環境或 settings 讀取 OPENAI_API_KEY / OPENAI_API_BASE，建立 OpenAI Client。
-    """
     api_key = os.getenv("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", None)
     api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
     if not api_key or api_key.strip().upper() == "EMPTY":
-        raise ValueError("❌ 請在 Render 的 Environment 設定 OPENAI_API_KEY（或本地 .env）")
+        raise ValueError("❌ 請設定 OPENAI_API_KEY（Render → Environment 或本地 .env）")
     return OpenAI(api_key=api_key, base_url=api_base)
 
 
-# -----------------------------
-# 語音轉文字（Whisper API）
-# -----------------------------
+# =========================
+# 長音檔：轉格式 + 切片（8 分鐘一段）
+# =========================
+def _prepare_audio_chunks(src_path: str,
+                          chunk_ms: int = 8 * 60 * 1000,
+                          overlap_ms: int = 2000) -> List[str]:
+    """
+    將任意長度音檔轉為 16kHz mono wav，切段，回傳臨時檔路徑清單。
+    需系統有 ffmpeg（由 apt.txt 安裝）。
+    """
+    if not os.path.exists(src_path):
+        raise FileNotFoundError(f"找不到音檔：{src_path}")
+
+    audio = AudioSegment.from_file(src_path)
+    audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+
+    paths: List[str] = []
+    duration = len(audio)
+    start = 0
+    idx = 0
+
+    while start < duration:
+        end = min(start + chunk_ms, duration)
+        segment = audio[max(0, start - overlap_ms):end]
+        fd, tmp_path = tempfile.mkstemp(suffix=f".chunk{idx}.wav")
+        os.close(fd)
+        segment.export(tmp_path, format="wav")
+        paths.append(tmp_path)
+        start = end
+        idx += 1
+
+    return paths
+
+
 def transcribe_with_whisper(audio_path: str) -> Optional[str]:
     """
-    使用 OpenAI Whisper API 進行轉錄。回傳文字或 None。
+    針對長音檔：先切片後逐段用 whisper-1 轉錄，最後合併。
     """
     try:
         if not os.path.exists(audio_path):
             print(f"❌ 找不到音訊檔案：{audio_path}")
             return None
-        print("✅ Whisper API 轉錄開始")
+
+        print("✅ Whisper API 轉錄開始（長音檔自動分段）")
         client = create_openai_client()
-        with open(audio_path, "rb") as f:
-            resp = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f
-            )
-        # SDK v1：resp.text 為轉錄結果
-        return getattr(resp, "text", None) or (resp if isinstance(resp, str) else None)
+        chunk_paths = _prepare_audio_chunks(audio_path)
+
+        pieces: List[str] = []
+        for i, cpath in enumerate(chunk_paths):
+            try:
+                with open(cpath, "rb") as f:
+                    resp = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f
+                    )
+                text = getattr(resp, "text", None) or (resp if isinstance(resp, str) else "")
+                print(f"  └─ 分段 {i+1}/{len(chunk_paths)} 完成，長度：{len(text)}")
+                pieces.append((text or "").strip())
+            finally:
+                try:
+                    os.remove(cpath)
+                except Exception:
+                    pass
+
+        full_text = "\n".join(t for t in pieces if t)
+        return full_text.strip() or None
+
     except Exception as e:
         print(f"❌ Whisper API 轉錄錯誤: {e}")
         return None
 
 
-# -----------------------------
-# 文字分段（避免一次餵太長）
-# -----------------------------
+# =========================
+# 文本分段（避免 prompt 過長）
+# =========================
 def dynamic_split(text: str, min_length: int = 300, max_length: int = 1000) -> List[str]:
     text = text.strip()
     if len(text) <= max_length:
@@ -74,9 +121,9 @@ def dynamic_split(text: str, min_length: int = 300, max_length: int = 1000) -> L
     return chunks
 
 
-# -----------------------------
+# =========================
 # 摘要（分段 + 總結）
-# -----------------------------
+# =========================
 def generate_summary_for_chunk(client: OpenAI, chunk: str, chunk_index: int, total_chunks: int) -> str:
     messages = [
         {"role": "system", "content": f"""你是一位專業的繁體中文課程摘要設計師。
@@ -88,7 +135,7 @@ def generate_summary_for_chunk(client: OpenAI, chunk: str, chunk_index: int, tot
     ]
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",   # 較快、較不易超時
             messages=messages,
             temperature=0.3,
             max_tokens=400
@@ -113,7 +160,7 @@ def combine_summaries(client: OpenAI, summaries: List[str]) -> str:
     ]
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=messages,
             temperature=0.3,
             max_tokens=512
@@ -124,10 +171,10 @@ def combine_summaries(client: OpenAI, summaries: List[str]) -> str:
         return "整合摘要失敗"
 
 
-# -----------------------------
+# =========================
 # 出題（選擇題 + 是非題）
-# -----------------------------
-def _normalize_mcq_payload(data: Any) -> List[Dict[str, Any]]:
+# =========================
+def normalize_mcq_payload(data: Any) -> List[Dict[str, Any]]:
     if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
         items = data["items"]
     elif isinstance(data, list):
@@ -166,13 +213,11 @@ def _normalize_mcq_payload(data: Any) -> List[Dict[str, Any]]:
     return cleaned
 
 
-def _safe_json_parse(raw: str) -> List[Dict[str, Any]]:
-    # 1st attempt
+def safe_json_parse(raw: str) -> List[Dict[str, Any]]:
     try:
-        return _normalize_mcq_payload(json.loads(raw))
+        return normalize_mcq_payload(json.loads(raw))
     except Exception:
         pass
-    # try code-block
     m = re.search(r'```json\s*([\s\S]*?)```', raw, re.IGNORECASE)
     if not m:
         m = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
@@ -181,7 +226,7 @@ def _safe_json_parse(raw: str) -> List[Dict[str, Any]]:
         candidate = candidate.replace("“", '"').replace("”", '"').replace("’", "'")
         candidate = re.sub(r",\s*([\]}])", r"\1", candidate)
         try:
-            return _normalize_mcq_payload(json.loads(candidate))
+            return normalize_mcq_payload(json.loads(candidate))
         except Exception as e:
             print("❌ JSON 區塊解析仍失敗：", e)
     print("⚠️ MCQ 原始回應（截斷 500 字）：", raw[:500])
@@ -199,13 +244,13 @@ concept, question, options(A/B/C/D), answer(只能是 A/B/C/D), explanation。""
     # 嘗試 1
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=messages,
             temperature=0.2,
             max_tokens=1500
         )
         raw = resp.choices[0].message.content or ""
-        return _safe_json_parse(raw)
+        return safe_json_parse(raw)
     except Exception as e:
         print("🔁 第一次解析失敗，改用更嚴格提示重試：", e)
 
@@ -223,7 +268,7 @@ concept, question, options(A/B/C/D), answer(只能是 A/B/C/D), explanation。""
             max_tokens=1500
         )
         raw = resp.choices[0].message.content or ""
-        return _safe_json_parse(raw)
+        return safe_json_parse(raw)
     except Exception as e:
         print("❌ 重試仍失敗：", e)
         return []
@@ -260,10 +305,10 @@ def generate_tf_questions(client: OpenAI, summary: str, count: int) -> List[Dict
         return []
 
 
-# -----------------------------
+# =========================
 # 寫入資料庫
-# -----------------------------
-def _parse_and_store_questions(quiz_data: List[Dict[str, Any]], lecture: Lecture, question_type: str) -> None:
+# =========================
+def parse_and_store_questions(summary: str, quiz_data: List[Dict[str, Any]], lecture: Lecture, question_type: str) -> None:
     if not quiz_data:
         return
     for item in quiz_data:
@@ -293,9 +338,9 @@ def _parse_and_store_questions(quiz_data: List[Dict[str, Any]], lecture: Lecture
             print(f"⚠️ 儲存題目失敗：{e}")
 
 
-# -----------------------------
-# 主流程：從音檔到摘要與題庫
-# -----------------------------
+# =========================
+# Pipeline：音檔 → 摘要 → 題庫
+# =========================
 def process_audio_and_generate_quiz(lecture_id: int, num_mcq: int = 3, num_tf: int = 0) -> None:
     lecture = Lecture.objects.get(id=lecture_id)
     client = create_openai_client()
@@ -318,16 +363,19 @@ def process_audio_and_generate_quiz(lecture_id: int, num_mcq: int = 3, num_tf: i
     print("🧠 開始產生考題")
     if num_mcq > 0:
         mcq_data = generate_quiz_with_retry(client, final_summary, num_mcq)
-        _parse_and_store_questions(mcq_data, lecture, 'mcq')
+        if mcq_data:
+            parse_and_store_questions(final_summary, mcq_data, lecture, 'mcq')
+        else:
+            print("⚠️ 沒有回傳 MCQ 題目")
 
     if num_tf > 0:
         tf_data = generate_tf_questions(client, final_summary, num_tf)
-        _parse_and_store_questions(tf_data, lecture, 'tf')
+        if tf_data:
+            parse_and_store_questions(final_summary, tf_data, lecture, 'tf')
+        else:
+            print("⚠️ 沒有回傳 TF 題目")
 
 
-# -----------------------------
-# 若已有人工作為：只從 transcript 產出摘要與題庫
-# -----------------------------
 def process_transcript_and_generate_quiz(lecture: Lecture, client: Optional[OpenAI] = None,
                                          num_mcq: int = 3, num_tf: int = 0) -> None:
     client = client or create_openai_client()
@@ -347,8 +395,14 @@ def process_transcript_and_generate_quiz(lecture: Lecture, client: Optional[Open
     print("🧠 開始產生考題")
     if num_mcq > 0:
         mcq_data = generate_quiz_with_retry(client, final_summary, num_mcq)
-        _parse_and_store_questions(mcq_data, lecture, 'mcq')
+        if mcq_data:
+            parse_and_store_questions(final_summary, mcq_data, lecture, 'mcq')
+        else:
+            print("⚠️ 沒有回傳 MCQ 題目")
 
     if num_tf > 0:
         tf_data = generate_tf_questions(client, final_summary, num_tf)
-        _parse_and_store_questions(tf_data, lecture, 'tf')
+        if tf_data:
+            parse_and_store_questions(final_summary, tf_data, lecture, 'tf')
+        else:
+            print("⚠️ 沒有回傳 TF 題目")
